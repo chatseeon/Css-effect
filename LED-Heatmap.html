@@ -1,0 +1,494 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Blue Heatmap – 8×45 Fluid Slow</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        html,
+        body {
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background: #000000;
+            font-family: 'Inter', system-ui, -apple-system, sans-serif;
+            -webkit-tap-highlight-color: transparent;
+            user-select: none;
+            -webkit-user-select: none;
+            cursor: default;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .heatmap-wrapper {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            background: #000000;
+            padding: 24px 20px;
+            border-radius: 14px;
+            box-shadow: 0 0 0 1px rgba(60, 100, 160, 0.08), 0 16px 48px rgba(0, 0, 0, 0.9);
+            max-width: 98vw;
+            max-height: 98vh;
+        }
+        canvas {
+            display: block;
+            background: #000000;
+            border-radius: 6px;
+        }
+        .legend {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-top: 14px;
+            color: rgba(180, 200, 230, 0.7);
+            font-size: 11px;
+            letter-spacing: 0.4px;
+            font-weight: 400;
+            text-transform: uppercase;
+        }
+        .legend-squares {
+            display: flex;
+            gap: 3px;
+        }
+        .legend-square {
+            width: 14px;
+            height: 14px;
+            border-radius: 3px;
+            transition: background-color 0.2s;
+        }
+        .legend-label {
+            opacity: 0.7;
+            font-size: 10px;
+            letter-spacing: 0.3px;
+        }
+        @media (max-width: 600px) {
+            .heatmap-wrapper {
+                padding: 16px 10px;
+                border-radius: 10px;
+            }
+            .legend {
+                font-size: 9px;
+                gap: 5px;
+                margin-top: 10px;
+            }
+            .legend-square {
+                width: 11px;
+                height: 11px;
+                border-radius: 2.5px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="heatmap-wrapper">
+        <canvas id="heatmapCanvas"></canvas>
+        <div class="legend">
+            <span class="legend-label">Less</span>
+            <div class="legend-squares" id="legendSquares"></div>
+            <span class="legend-label">More</span>
+        </div>
+    </div>
+
+    <script>
+        (function() {
+            'use strict';
+
+            // ============ 1. 自包含 Simplex 噪声 + FBM ============
+            const SimplexNoise = (() => {
+                const grad3 = [
+                    [1, 1, 0], [-1, 1, 0], [1, -1, 0], [-1, -1, 0],
+                    [1, 0, 1], [-1, 0, 1], [1, 0, -1], [-1, 0, -1],
+                    [0, 1, 1], [0, -1, 1], [0, 1, -1], [0, -1, -1]
+                ];
+                const p = [151, 160, 137, 91, 90, 15, 131, 13, 201, 95, 96, 53, 194, 233, 7, 225, 140, 36, 103, 30,
+                    69, 142, 8, 99, 37, 240, 21, 10, 23, 190, 6, 148, 247, 120, 234, 75, 0, 26, 197, 62, 94, 252,
+                    219, 203, 117, 35, 11, 32, 57, 177, 33, 88, 237, 149, 56, 87, 174, 20, 125, 136, 171, 168, 68,
+                    175, 74, 165, 71, 134, 139, 48, 27, 166, 77, 146, 158, 231, 83, 111, 229, 122, 60, 211, 133, 230,
+                    220, 105, 92, 41, 55, 46, 245, 40, 244, 102, 143, 54, 65, 25, 63, 161, 1, 216, 80, 73, 209, 76,
+                    132, 187, 208, 89, 18, 169, 200, 196, 135, 130, 116, 188, 159, 86, 164, 100, 109, 198, 173, 186, 3,
+                    64, 52, 217, 226, 250, 124, 123, 5, 202, 38, 147, 118, 126, 255, 82, 85, 212, 207, 206, 59, 227,
+                    47, 16, 58, 17, 182, 189, 28, 42, 223, 183, 170, 213, 119, 248, 152, 2, 44, 154, 163, 70, 221,
+                    153, 101, 155, 167, 43, 172, 9, 129, 22, 39, 253, 19, 98, 108, 110, 79, 113, 224, 232, 178, 185,
+                    112, 104, 218, 246, 97, 228, 251, 34, 242, 193, 238, 210, 144, 12, 191, 179, 162, 241, 81, 51, 145,
+                    235, 249, 14, 239, 107, 49, 192, 214, 31, 181, 199, 106, 157, 184, 84, 204, 176, 115, 121, 50, 45,
+                    127, 4, 150, 254, 138, 236, 205, 93, 222, 114, 67, 29, 24, 72, 243, 141, 128, 195, 78, 66, 215, 61,
+                    156, 180
+                ];
+                const perm = new Uint8Array(512);
+                for (let i = 0; i < 512; i++) perm[i] = p[i & 255];
+
+                function dot3(g, x, y, z) { return g[0] * x + g[1] * y + g[2] * z; }
+
+                return function(xin, yin, zin) {
+                    let n0, n1, n2, n3;
+                    const F3 = 1.0 / 3.0;
+                    const s = (xin + yin + zin) * F3;
+                    const i = Math.floor(xin + s);
+                    const j = Math.floor(yin + s);
+                    const k = Math.floor(zin + s);
+                    const G3 = 1.0 / 6.0;
+                    const t = (i + j + k) * G3;
+                    const x0 = xin - (i - t);
+                    const y0 = yin - (j - t);
+                    const z0 = zin - (k - t);
+                    let i1, j1, k1, i2, j2, k2;
+                    if (x0 >= y0) {
+                        if (y0 >= z0) { i1 = 1;
+                            j1 = 0;
+                            k1 = 0;
+                            i2 = 1;
+                            j2 = 1;
+                            k2 = 0; } else if (x0 >= z0) { i1 = 1;
+                            j1 = 0;
+                            k1 = 0;
+                            i2 = 1;
+                            j2 = 0;
+                            k2 = 1; } else { i1 = 0;
+                            j1 = 0;
+                            k1 = 1;
+                            i2 = 1;
+                            j2 = 0;
+                            k2 = 1; }
+                    } else {
+                        if (y0 < z0) { i1 = 0;
+                            j1 = 0;
+                            k1 = 1;
+                            i2 = 0;
+                            j2 = 1;
+                            k2 = 1; } else if (x0 < z0) { i1 = 0;
+                            j1 = 1;
+                            k1 = 0;
+                            i2 = 0;
+                            j2 = 1;
+                            k2 = 1; } else { i1 = 0;
+                            j1 = 1;
+                            k1 = 0;
+                            i2 = 1;
+                            j2 = 1;
+                            k2 = 0; }
+                    }
+                    const x1 = x0 - i1 + G3;
+                    const y1 = y0 - j1 + G3;
+                    const z1 = z0 - k1 + G3;
+                    const x2 = x0 - i2 + 2.0 * G3;
+                    const y2 = y0 - j2 + 2.0 * G3;
+                    const z2 = z0 - k2 + 2.0 * G3;
+                    const x3 = x0 - 1.0 + 3.0 * G3;
+                    const y3 = y0 - 1.0 + 3.0 * G3;
+                    const z3 = z0 - 1.0 + 3.0 * G3;
+                    const ii = i & 255;
+                    const jj = j & 255;
+                    const kk = k & 255;
+                    let gi0 = perm[ii + perm[jj + perm[kk]]] % 12;
+                    let gi1 = perm[ii + i1 + perm[jj + j1 + perm[kk + k1]]] % 12;
+                    let gi2 = perm[ii + i2 + perm[jj + j2 + perm[kk + k2]]] % 12;
+                    let gi3 = perm[ii + 1 + perm[jj + 1 + perm[kk + 1]]] % 12;
+                    let t0 = 0.6 - x0 * x0 - y0 * y0 - z0 * z0;
+                    if (t0 > 0) { t0 *= t0;
+                        n0 = t0 * t0 * dot3(grad3[gi0], x0, y0, z0); } else n0 = 0;
+                    let t1 = 0.6 - x1 * x1 - y1 * y1 - z1 * z1;
+                    if (t1 > 0) { t1 *= t1;
+                        n1 = t1 * t1 * dot3(grad3[gi1], x1, y1, z1); } else n1 = 0;
+                    let t2 = 0.6 - x2 * x2 - y2 * y2 - z2 * z2;
+                    if (t2 > 0) { t2 *= t2;
+                        n2 = t2 * t2 * dot3(grad3[gi2], x2, y2, z2); } else n2 = 0;
+                    let t3 = 0.6 - x3 * x3 - y3 * y3 - z3 * z3;
+                    if (t3 > 0) { t3 *= t3;
+                        n3 = t3 * t3 * dot3(grad3[gi3], x3, y3, z3); } else n3 = 0;
+                    return 32.0 * (n0 + n1 + n2 + n3);
+                };
+            })();
+
+            function fbm(x, y, z, octaves, lacunarity, gain) {
+                let value = 0;
+                let amplitude = 1;
+                let frequency = 1;
+                let maxVal = 0;
+                for (let i = 0; i < octaves; i++) {
+                    value += SimplexNoise(x * frequency, y * frequency, z) * amplitude;
+                    maxVal += amplitude;
+                    amplitude *= gain;
+                    frequency *= lacunarity;
+                    z += 0.5;
+                }
+                return value / maxVal;
+            }
+
+            function smoothstep(edge0, edge1, x) {
+                const t = Math.max(0, Math.min(1, (x - edge0) / (edge1 - edge0)));
+                return t * t * (3 - 2 * t);
+            }
+
+            // ============ 2. 热力图配置：8 行 × 45 列 ============
+            const GRID_COLS = 45;
+            const GRID_ROWS = 8;
+            const TOTAL_CELLS = GRID_COLS * GRID_ROWS; // 360
+
+            const canvas = document.getElementById('heatmapCanvas');
+            const ctx = canvas.getContext('2d', { alpha: false });
+
+            const COLOR_LEVELS = [
+                [2, 4, 7],
+                [4, 8, 14],
+                [7, 15, 26],
+                [11, 26, 43],
+                [17, 40, 64],
+                [25, 58, 88],
+                [36, 80, 116],
+                [52, 108, 148],
+                [78, 145, 185],
+                [120, 190, 225]
+            ];
+            const MAX_LEVEL = COLOR_LEVELS.length - 1;
+
+            let dpr = Math.min(window.devicePixelRatio || 1, 2);
+            let cellSizeCss = 12;
+            let gapCss = 3;
+            let cornerRadiusCss = 3.5;
+
+            let canvasCssWidth = 0;
+            let canvasCssHeight = 0;
+            let cellDrawSize = 0;
+            let gapDrawSize = 0;
+
+            let targetLevels = new Float32Array(TOTAL_CELLS);
+            let currentLevels = new Float32Array(TOTAL_CELLS).fill(0.5);
+            let displayLevels = new Uint8Array(TOTAL_CELLS);
+
+            let noiseX = new Float32Array(TOTAL_CELLS);
+            let noiseY = new Float32Array(TOTAL_CELLS);
+
+            let globalTime = Math.random() * 50;
+            let lastTimestamp = 0;
+
+            // ---------- 流动感优化参数：保持慢速但所有点都在移动 ----------
+            const TIME_SPEED = 0.55;        // 接近原版，但略慢，保证流动感
+            const SMOOTHING_RATE = 1.8;      // 平滑但不会迟滞
+            const BREATH_FREQ = 0.5;         // 呼吸节奏更自然
+            const BREATH_AMOUNT = 0.22;
+            // 提高空间频率，使相邻点差异更大，流动更明显
+            const NOISE_SCALE_X = 0.55;      // 原为0.35
+            const NOISE_SCALE_Y = 0.9;       // 原为0.7
+            // ---------------------------------------------
+
+            function computeLayout() {
+                dpr = Math.min(window.devicePixelRatio || 1, 2);
+
+                const wrapper = document.querySelector('.heatmap-wrapper');
+                const wrapperStyle = window.getComputedStyle(wrapper);
+                const wrapperPaddingLeft = parseFloat(wrapperStyle.paddingLeft) || 20;
+                const wrapperPaddingRight = parseFloat(wrapperStyle.paddingRight) || 20;
+                const wrapperPaddingTop = parseFloat(wrapperStyle.paddingTop) || 24;
+                const wrapperPaddingBottom = parseFloat(wrapperStyle.paddingBottom) || 16;
+
+                const maxAvailableWidth = window.innerWidth - wrapperPaddingLeft - wrapperPaddingRight - 4;
+                const maxAvailableHeight = window.innerHeight - wrapperPaddingTop - wrapperPaddingBottom - 52;
+
+                const totalGapWidth = (GRID_COLS - 1) * gapCss;
+                let computedCell = Math.floor((maxAvailableWidth - totalGapWidth) / GRID_COLS);
+
+                const totalGapHeight = (GRID_ROWS - 1) * gapCss;
+                const computedCellFromHeight = Math.floor((maxAvailableHeight - totalGapHeight) / GRID_ROWS);
+
+                cellSizeCss = Math.max(6, Math.min(computedCell, computedCellFromHeight, 18));
+                cellSizeCss = Math.min(cellSizeCss, 16);
+
+                gapCss = Math.max(2, Math.min(4, Math.round(cellSizeCss * 0.27)));
+                cornerRadiusCss = Math.max(2, Math.min(5, cellSizeCss * 0.35));
+
+                cellDrawSize = cellSizeCss;
+                gapDrawSize = gapCss;
+
+                canvasCssWidth = GRID_COLS * cellDrawSize + (GRID_COLS - 1) * gapDrawSize;
+                canvasCssHeight = GRID_ROWS * cellDrawSize + (GRID_ROWS - 1) * gapDrawSize;
+
+                canvas.width = Math.round(canvasCssWidth * dpr);
+                canvas.height = Math.round(canvasCssHeight * dpr);
+                canvas.style.width = canvasCssWidth + 'px';
+                canvas.style.height = canvasCssHeight + 'px';
+
+                ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+                let idx = 0;
+                for (let row = 0; row < GRID_ROWS; row++) {
+                    for (let col = 0; col < GRID_COLS; col++) {
+                        noiseX[idx] = col * NOISE_SCALE_X;
+                        noiseY[idx] = row * NOISE_SCALE_Y;
+                        idx++;
+                    }
+                }
+
+                updateLegend();
+            }
+
+            function updateLegend() {
+                const legendContainer = document.getElementById('legendSquares');
+                if (!legendContainer) return;
+                legendContainer.innerHTML = '';
+                const legendIndices = [0, 2, 4, 6, 8, 9];
+                for (const li of legendIndices) {
+                    const sq = document.createElement('div');
+                    sq.className = 'legend-square';
+                    const c = COLOR_LEVELS[Math.min(li, MAX_LEVEL)];
+                    sq.style.backgroundColor = `rgb(${c[0]}, ${c[1]}, ${c[2]})`;
+                    legendContainer.appendChild(sq);
+                }
+            }
+
+            function update(timestamp) {
+                if (!lastTimestamp) lastTimestamp = timestamp;
+                let dt = (timestamp - lastTimestamp) / 1000;
+                lastTimestamp = timestamp;
+
+                if (dt > 0.05) dt = 0.05;
+                if (dt <= 0) dt = 0.016;
+
+                globalTime += dt * TIME_SPEED;
+
+                const breathPhase = (Math.sin(globalTime * BREATH_FREQ) + 1) * 0.5;
+                const globalBreath = 0.82 + BREATH_AMOUNT * smoothstep(0.1, 0.9, breathPhase);
+
+                const smoothingFactor = 1 - Math.exp(-dt * SMOOTHING_RATE);
+
+                for (let i = 0; i < TOTAL_CELLS; i++) {
+                    const nx = noiseX[i];
+                    const ny = noiseY[i];
+                    const t = globalTime;
+
+                    // 时间系数恢复至接近原版，保证每个点都在演化
+                    const warpX = fbm(nx * 1.4 + t * 0.12, ny * 1.4 - t * 0.08, t * 0.20, 3, 2.0, 0.5) * 1.8;
+                    const warpY = fbm(nx * 1.4 + t * 0.06, ny * 1.4 + t * 0.14, t * 0.20, 3, 2.0, 0.5) * 1.8;
+
+                    const broad1 = fbm(nx * 0.8 + warpX, ny * 0.8 + warpY, t * 0.15, 4, 2.0, 0.5);
+                    const broad2 = fbm(nx * 0.8 - warpY * 1.1, ny * 0.8 + warpX * 1.1, t * 0.12 + 7.0, 4, 2.0, 0.5);
+                    const med1 = fbm(nx * 2.8 + warpX * 1.5, ny * 2.8 - warpY * 1.5, t * 0.28, 3, 2.0, 0.5);
+                    const med2 = fbm(nx * 2.8 - warpY * 1.8, ny * 2.8 + warpX * 1.8, t * 0.24 + 4.5, 3, 2.0, 0.5);
+                    const fine = fbm(nx * 6.5 + warpX * 2.2, ny * 6.5 + warpY * 2.2, t * 0.38, 3, 2.0, 0.5) * 0.2;
+
+                    const glintNoise = fbm(nx * 14.0 + t * 0.06, ny * 14.0 - t * 0.07, t * 0.12, 3, 2.0, 0.5);
+                    const glint = Math.max(0, glintNoise - 0.38) * 0.5;
+
+                    const rawTarget = broad1 * 0.35 + broad2 * 0.25 + med1 * 0.13 + med2 * 0.13 + fine + glint * 0.15;
+
+                    let mapped = (rawTarget + 1) * 0.5;
+                    // 调整映射曲线，避免太多点卡在极低值
+                    mapped = smoothstep(0.1, 0.65, mapped);
+                    mapped = Math.pow(mapped, 1.1);
+
+                    mapped *= globalBreath;
+
+                    const levelFloat = mapped * MAX_LEVEL;
+                    targetLevels[i] = Math.min(MAX_LEVEL, Math.max(0, levelFloat));
+                }
+
+                for (let i = 0; i < TOTAL_CELLS; i++) {
+                    currentLevels[i] += (targetLevels[i] - currentLevels[i]) * smoothingFactor;
+                    displayLevels[i] = Math.round(currentLevels[i]);
+                }
+            }
+
+            function render() {
+                ctx.fillStyle = '#000000';
+                ctx.fillRect(0, 0, canvasCssWidth, canvasCssHeight);
+
+                let idx = 0;
+                for (let row = 0; row < GRID_ROWS; row++) {
+                    for (let col = 0; col < GRID_COLS; col++) {
+                        const level = displayLevels[idx];
+                        const color = COLOR_LEVELS[Math.min(level, MAX_LEVEL)];
+                        const x = col * (cellDrawSize + gapDrawSize);
+                        const y = row * (cellDrawSize + gapDrawSize);
+                        const size = cellDrawSize;
+                        const radius = cornerRadiusCss;
+
+                        ctx.fillStyle = `rgb(${color[0]}, ${color[1]}, ${color[2]})`;
+                        ctx.beginPath();
+                        ctx.roundRect(x, y, size, size, radius);
+                        ctx.fill();
+
+                        if (level >= 5) {
+                            const glowAlpha = (level - 5) / (MAX_LEVEL - 5) * 0.18;
+                            const highlightGrad = ctx.createLinearGradient(x, y, x, y + size * 0.6);
+                            highlightGrad.addColorStop(0, `rgba(255, 255, 255, ${glowAlpha})`);
+                            highlightGrad.addColorStop(1, 'rgba(255, 255, 255, 0)');
+                            ctx.fillStyle = highlightGrad;
+                            ctx.beginPath();
+                            ctx.roundRect(x, y, size, size, radius);
+                            ctx.fill();
+                        }
+
+                        if (level <= 1) {
+                            ctx.strokeStyle = 'rgba(30, 50, 80, 0.12)';
+                            ctx.lineWidth = 0.5;
+                            ctx.beginPath();
+                            ctx.roundRect(x, y, size, size, radius);
+                            ctx.stroke();
+                        }
+
+                        idx++;
+                    }
+                }
+            }
+
+            // ---------- 动画循环（支持双击暂停） ----------
+            let animationId = null;
+            let isPaused = false;
+
+            function loop(timestamp) {
+                if (isPaused) {
+                    animationId = requestAnimationFrame(loop);
+                    return;
+                }
+                update(timestamp);
+                render();
+                animationId = requestAnimationFrame(loop);
+            }
+
+            document.addEventListener('dblclick', () => {
+                isPaused = !isPaused;
+                if (!isPaused) {
+                    lastTimestamp = 0;
+                }
+            });
+
+            let resizeTimeout;
+            window.addEventListener('resize', () => {
+                clearTimeout(resizeTimeout);
+                resizeTimeout = setTimeout(() => {
+                    computeLayout();
+                    for (let i = 0; i < TOTAL_CELLS; i++) {
+                        currentLevels[i] = targetLevels[i] || 0.5;
+                    }
+                }, 100);
+            });
+
+            if (!CanvasRenderingContext2D.prototype.roundRect) {
+                CanvasRenderingContext2D.prototype.roundRect = function(x, y, w, h, r) {
+                    r = Math.min(r, w / 2, h / 2);
+                    this.moveTo(x + r, y);
+                    this.lineTo(x + w - r, y);
+                    this.arcTo(x + w, y, x + w, y + r, r);
+                    this.lineTo(x + w, y + h - r);
+                    this.arcTo(x + w, y + h, x + w - r, y + h, r);
+                    this.lineTo(x + r, y + h);
+                    this.arcTo(x, y + h, x, y + h - r, r);
+                    this.lineTo(x, y + r);
+                    this.arcTo(x, y, x + r, y, r);
+                    this.closePath();
+                    return this;
+                };
+            }
+
+            computeLayout();
+            animationId = requestAnimationFrame(loop);
+        })();
+    </script>
+</body>
+</html>
